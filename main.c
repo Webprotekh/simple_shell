@@ -1,91 +1,134 @@
-#include "shell.c"
+#include "shell.h"
+
+void sig_handler(int sig);
+int execute(char **args, char **front);
 
 /**
- * main - Simple Shell (Hsh)
- *@ALX-school
- * @argc: Argument Count
- * @argv:Argument Value
- * Return: Exit Value By Status
+ * sig_handler - Prints a new prompt upon a signal.
+ * @sig: The signal.
  */
-
-int main(__attribute__((unused)) int argc, char **argv)
+void sig_handler(int sig)
 {
-	char *input, **cmd;
-	int counter = 0, statue = 1, st = 0;
+	char *new_prompt = "\n$ ";
 
-	if (argv[1] != NULL)
-		read_file(argv[1], argv);
-	signal(SIGINT, signal_to_handel);
-	while (statue)
+	(void)sig;
+	signal(SIGINT, sig_handler);
+	write(STDIN_FILENO, new_prompt, 3);
+}
+
+/**
+ * execute - Executes a command in a child process.
+ * @args: An array of arguments.
+ * @front: A double pointer to the beginning of args.
+ *
+ * Return: If an error occurs - a corresponding error code.
+ *         O/w - The exit value of the last executed command.
+ */
+int execute(char **args, char **front)
+{
+	pid_t child_pid;
+	int status, flag = 0, ret = 0;
+	char *command = args[0];
+
+	if (command[0] != '/' && command[0] != '.')
 	{
-		counter++;
-		if (isatty(STDIN_FILENO))
-			prompt();
-		input = _getline();
-		if (input[0] == '\0')
+		flag = 1;
+		command = get_location(command);
+	}
+
+	if (!command || (access(command, F_OK) == -1))
+	{
+		if (errno == EACCES)
+			ret = (create_error(args, 126));
+		else
+			ret = (create_error(args, 127));
+	}
+	else
+	{
+		child_pid = fork();
+		if (child_pid == -1)
 		{
-			continue;
+			if (flag)
+				free(command);
+			perror("Error child:");
+			return (1);
 		}
-		history(input);
-		cmd = parse_cmd(input);
-		if (_strcmp(cmd[0], "exit") == 0)
+		if (child_pid == 0)
 		{
-			exit_bul(cmd, input, argv, counter);
-		}
-		else if (check_builtin(cmd) == 0)
-		{
-			st = handle_builtin(cmd, st);
-			free_all(cmd, input);
-			continue;
+			execve(command, args, environ);
+			if (errno == EACCES)
+				ret = (create_error(args, 126));
+			free_env();
+			free_args(args, front);
+			free_alias_list(aliases);
+			_exit(ret);
 		}
 		else
 		{
-			st = check_cmd(cmd, input, counter, argv);
-
+			wait(&status);
+			ret = WEXITSTATUS(status);
 		}
-		free_all(cmd, input);
 	}
-	return (statue);
+	if (flag)
+		free(command);
+	return (ret);
 }
+
 /**
- * check_builtin - check builtin
+ * main - Runs a simple UNIX command interpreter.
+ * @argc: The number of arguments supplied to the program.
+ * @argv: An array of pointers to the arguments.
  *
- * @cmd:command to check
- * Return: 0 Succes -1 Fail
+ * Return: The return value of the last executed command.
  */
-int check_builtin(char **cmd)
+int main(int argc, char *argv[])
 {
-	bul_t fun[] = {
-		{"cd", NULL},
-		{"help", NULL},
-		{"echo", NULL},
-		{"history", NULL},
-		{NULL, NULL}
-	};
-	int i = 0;
-		if (*cmd == NULL)
+	int ret = 0, retn;
+	int *exe_ret = &retn;
+	char *prompt = "$ ", *new_line = "\n";
+
+	name = argv[0];
+	hist = 1;
+	aliases = NULL;
+	signal(SIGINT, sig_handler);
+
+	*exe_ret = 0;
+	environ = _copyenv();
+	if (!environ)
+		exit(-100);
+
+	if (argc != 1)
 	{
-		return (-1);
+		ret = proc_file_commands(argv[1], exe_ret);
+		free_env();
+		free_alias_list(aliases);
+		return (*exe_ret);
 	}
 
-	while ((fun + i)->command)
+	if (!isatty(STDIN_FILENO))
 	{
-		if (_strcmp(cmd[0], (fun + i)->command) == 0)
-			return (0);
-		i++;
+		while (ret != END_OF_FILE && ret != EXIT)
+			ret = handle_args(exe_ret);
+		free_env();
+		free_alias_list(aliases);
+		return (*exe_ret);
 	}
-	return (-1);
-}
-/**
- * creat_envi - Creat Array of Enviroment Variable
- * @envi: Array of Enviroment Variable
- * Return: Void
- */
-void creat_envi(char **envi)
-{
-	int i;
 
-	for (i = 0; environ[i]; i++)
-		envi[i] = _strdup(environ[i]);
-	envi[i] = NULL;
+	while (1)
+	{
+		write(STDOUT_FILENO, prompt, 2);
+		ret = handle_args(exe_ret);
+		if (ret == END_OF_FILE || ret == EXIT)
+		{
+			if (ret == END_OF_FILE)
+				write(STDOUT_FILENO, new_line, 1);
+			free_env();
+			free_alias_list(aliases);
+			exit(*exe_ret);
+		}
+	}
+
+	free_env();
+	free_alias_list(aliases);
+	return (*exe_ret);
 }
